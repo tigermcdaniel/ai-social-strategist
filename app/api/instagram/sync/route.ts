@@ -67,67 +67,42 @@ async function fetchMedia(igId: string, token: string): Promise<{ media: IGMedia
 async function fetchInsights(
   mediaId: string,
   token: string,
-  apiBase: string = FB_API
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Try insights with the given token and API base, then fall back to other combos
-  const tokenCombos = [
-    { t: token, base: apiBase },
-    { t: token, base: FB_API },
-    { t: token, base: IG_API },
-  ]
-
-  // Also try the other token if available
-  const pageToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN
-  const userToken = process.env.INSTAGRAM_ACCESS_TOKEN
-  if (userToken && userToken !== token) {
-    tokenCombos.push({ t: userToken, base: FB_API }, { t: userToken, base: IG_API })
-  }
-  if (pageToken && pageToken !== token) {
-    tokenCombos.push({ t: pageToken, base: FB_API }, { t: pageToken, base: IG_API })
-  }
-
-  let gotCoreInsights = false
-  for (const combo of tokenCombos) {
-    if (gotCoreInsights) break
+  // Use the page token directly against graph.facebook.com
+  // Confirmed working: {mediaId}/insights?metric=saved,shares,reach,comments,views
+  try {
+    const res = await apiFetch(
+      `${FB_API}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows&access_token=${token}`
+    )
+    for (const item of (res.data ?? []) as IGInsight[]) {
+      insights[item.name] = item.values?.[0]?.value ?? 0
+    }
+  } catch (err) {
+    // If follows causes issues, retry without it
+    console.log("[v0] Full insights failed, retrying without follows:", err instanceof Error ? err.message : String(err))
     try {
       const res = await apiFetch(
-        `${combo.base}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows&access_token=${combo.t}`
+        `${FB_API}/${mediaId}/insights?metric=saved,shares,reach,comments,views&access_token=${token}`
       )
       for (const item of (res.data ?? []) as IGInsight[]) {
         insights[item.name] = item.values?.[0]?.value ?? 0
       }
-      console.log("[v0] Insights succeeded via", combo.base, "- got:", Object.keys(insights).join(","))
-      gotCoreInsights = true
-    } catch (err) {
-      console.log("[v0] Insights failed via", combo.base, "-", err instanceof Error ? err.message : String(err))
+    } catch (err2) {
+      console.log("[v0] Core insights also failed:", err2 instanceof Error ? err2.message : String(err2))
     }
   }
 
-  // Try richer metrics with the combo that worked (or first combo)
-  if (gotCoreInsights) {
-    try {
-      const workingCombo = tokenCombos[0]
-      const res = await apiFetch(
-        `${workingCombo.base}/${mediaId}/insights?metric=total_interactions,profile_visits&access_token=${workingCombo.t}`
-      )
-      for (const item of (res.data ?? []) as IGInsight[]) {
-        insights[item.name] = item.values?.[0]?.value ?? 0
-      }
-    } catch { /* not available for this media type */ }
-
-    // Reels-specific
-    try {
-      const workingCombo = tokenCombos[0]
-      const res = await apiFetch(
-        `${workingCombo.base}/${mediaId}/insights?metric=clips_replays_count,ig_reels_avg_watch_time,ig_reels_video_view_total_time&access_token=${workingCombo.t}`
-      )
-      for (const item of (res.data ?? []) as IGInsight[]) {
-        insights[item.name] = item.values?.[0]?.value ?? 0
-      }
-    } catch { /* not a reel */ }
-  }
+  // Reels-specific metrics (separate call, non-fatal)
+  try {
+    const res = await apiFetch(
+      `${FB_API}/${mediaId}/insights?metric=clips_replays_count,ig_reels_avg_watch_time,ig_reels_video_view_total_time&access_token=${token}`
+    )
+    for (const item of (res.data ?? []) as IGInsight[]) {
+      insights[item.name] = item.values?.[0]?.value ?? 0
+    }
+  } catch { /* not a reel - that's fine */ }
 
   return insights
 }
@@ -199,7 +174,7 @@ export async function POST() {
     for (const media of testBatch) {
       try {
         console.log("[v0] Processing media:", media.id, "type:", media.media_type, "like_count:", media.like_count, "comments_count:", media.comments_count)
-        const insights = await fetchInsights(media.id, workingToken, workingApiBase)
+        const insights = await fetchInsights(media.id, pageToken)
         console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
         const views = insights.views ?? 0
