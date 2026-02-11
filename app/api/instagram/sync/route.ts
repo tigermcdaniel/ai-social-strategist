@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server"
 
 const FB_API = "https://graph.facebook.com/v22.0"
 const IG_API = "https://graph.instagram.com/v22.0"
-const KNOWN_IG_ACCOUNT_ID = "17841444738724947"
+const KNOWN_IG_ACCOUNT_ID = "17841400977919619"
 
 interface IGMedia {
   id: string
