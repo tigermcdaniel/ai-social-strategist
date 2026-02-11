@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Trash2 } from "lucide-react"
+import { ExternalLink, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { format } from "date-fns"
 
@@ -31,6 +31,9 @@ interface Post {
   content_pillar: string | null
   content_format: string | null
   hook_type: string | null
+  permalink: string | null
+  instagram_media_id: string | null
+  format: string | null
 }
 
 export function PostsTable({ posts }: { posts: Post[] }) {
@@ -50,7 +53,7 @@ export function PostsTable({ posts }: { posts: Post[] }) {
   if (posts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-16">
-        <p className="text-sm text-muted-foreground">No posts yet. Add your first post to start tracking.</p>
+        <p className="text-sm text-muted-foreground">No posts yet. Sync from Instagram or add a post manually to start tracking.</p>
       </div>
     )
   }
@@ -85,8 +88,21 @@ export function PostsTable({ posts }: { posts: Post[] }) {
                   {post.platform}
                 </Badge>
               </TableCell>
-              <TableCell className="max-w-[200px] truncate text-sm text-foreground">
-                {post.caption || "--"}
+              <TableCell className="max-w-[200px] text-sm text-foreground">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate">{post.caption || "--"}</span>
+                  {post.permalink && (
+                    <a
+                      href={post.permalink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-shrink-0 text-muted-foreground hover:text-primary"
+                      aria-label="View on Instagram"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="text-right text-sm text-foreground font-mono">
                 {post.views.toLocaleString()}
