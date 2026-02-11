@@ -71,29 +71,39 @@ async function fetchInsights(
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Only request metrics that the IG API actually returns via insights:
-  // saved, shares, reach (likes/comments come from media fields instead)
+  // Core metrics available on all media types
   try {
     const res = await apiFetch(
-      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views&access_token=${token}`
+      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows,total_interactions,profile_visits&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
   } catch (err) {
-    console.log("[v0] Insights failed for", mediaId, "-", err instanceof Error ? err.message : String(err))
+    // Some metrics may not be available on all media types - try a smaller set
+    console.log("[v0] Full insights failed for", mediaId, "- trying core set")
+    try {
+      const res = await apiFetch(
+        `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views&access_token=${token}`
+      )
+      for (const item of (res.data ?? []) as IGInsight[]) {
+        insights[item.name] = item.values?.[0]?.value ?? 0
+      }
+    } catch (err2) {
+      console.log("[v0] Core insights also failed for", mediaId, "-", err2 instanceof Error ? err2.message : String(err2))
+    }
   }
 
-  // Also try to get views/plays separately (available for reels/video)
+  // Reels-specific metrics (replays, avg watch time, total view time)
   try {
     const res = await apiFetch(
-      `${apiBase}/${mediaId}/insights?metric=plays&access_token=${token}`
+      `${apiBase}/${mediaId}/insights?metric=clips_replays_count,ig_reels_avg_watch_time,ig_reels_video_view_total_time&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
   } catch {
-    // plays not available for this media type - that's fine
+    // Not a reel or metrics unavailable - that's fine
   }
 
   return insights
@@ -169,17 +179,22 @@ export async function POST() {
         const insights = await fetchInsights(media.id, workingToken, workingApiBase)
         console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
-        // views = total times displayed/played, reach = unique accounts
-        const views = insights.views ?? insights.plays ?? 0
+        const views = insights.views ?? 0
         const reach = insights.reach ?? 0
         const likes = media.like_count ?? 0
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
+        const followsGained = insights.follows ?? 0
+        const profileVisits = insights.profile_visits ?? 0
+        const totalInteractionsIG = insights.total_interactions ?? 0
+        const replays = insights.clips_replays_count ?? 0
+        const avgWatchTime = insights.ig_reels_avg_watch_time ?? 0
+        const videoViewTotalTime = insights.ig_reels_video_view_total_time ?? 0
 
-        console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares })
+        console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares, followsGained, profileVisits, replays })
 
-        const totalInteractions = likes + comments + saves + shares
+        const totalInteractions = totalInteractionsIG > 0 ? totalInteractionsIG : (likes + comments + saves + shares)
         const engagementRate = reach > 0 ? Number(((totalInteractions / reach) * 100).toFixed(4)) : 0
         const saveRate = reach > 0 ? Number(((saves / reach) * 100).toFixed(4)) : 0
         const shareRate = reach > 0 ? Number(((shares / reach) * 100).toFixed(4)) : 0
@@ -197,7 +212,12 @@ export async function POST() {
           comments,
           saves,
           shares,
-          follows_gained: 0,
+          follows_gained: followsGained,
+          profile_visits: profileVisits,
+          total_interactions: totalInteractions,
+          replays,
+          avg_watch_time: avgWatchTime,
+          video_view_total_time: videoViewTotalTime,
           engagement_rate: engagementRate,
           save_rate: saveRate,
           share_rate: shareRate,
