@@ -84,7 +84,7 @@ async function fetchInsights(
     console.log("[v0] Full insights failed for", mediaId, "- trying core set")
     try {
       const res = await apiFetch(
-        `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views&access_token=${token}`
+        `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows&access_token=${token}`
       )
       for (const item of (res.data ?? []) as IGInsight[]) {
         insights[item.name] = item.values?.[0]?.value ?? 0

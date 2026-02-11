@@ -70,6 +70,7 @@ export function PostsTable({ posts }: { posts: Post[] }) {
             <TableHead className="text-right text-muted-foreground">Likes</TableHead>
             <TableHead className="text-right text-muted-foreground">Saves</TableHead>
             <TableHead className="text-right text-muted-foreground">Shares</TableHead>
+            <TableHead className="text-right text-muted-foreground">Follows</TableHead>
             <TableHead className="text-right text-muted-foreground">Eng. Rate</TableHead>
             <TableHead className="text-muted-foreground">Pillar</TableHead>
             <TableHead className="text-muted-foreground">Format</TableHead>
@@ -115,6 +116,9 @@ export function PostsTable({ posts }: { posts: Post[] }) {
               </TableCell>
               <TableCell className="text-right text-sm text-foreground font-mono">
                 {post.shares.toLocaleString()}
+              </TableCell>
+              <TableCell className="text-right text-sm text-foreground font-mono">
+                {post.follows_gained?.toLocaleString() ?? "0"}
               </TableCell>
               <TableCell className="text-right text-sm font-semibold text-primary font-mono">
                 {post.engagement_rate ? `${Number(post.engagement_rate).toFixed(2)}%` : "--"}
