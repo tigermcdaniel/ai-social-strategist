@@ -75,7 +75,7 @@ async function fetchInsights(
   // saved, shares, reach (likes/comments come from media fields instead)
   try {
     const res = await apiFetch(
-      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach&access_token=${token}`
+      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
@@ -171,16 +171,14 @@ export async function POST() {
         const insights = await fetchInsights(media.id, workingToken, workingApiBase)
         console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
-        // likes + comments come from media fields (always available)
-        // saved, shares, reach come from insights endpoint
-        // plays (views) come from insights when available (reels/video)
+        // likes from media fields, comments/saved/shares/reach from insights
+        // plays (views) from insights when available (reels/video)
         const views = insights.plays ?? 0
         const reach = insights.reach ?? 0
         const likes = media.like_count ?? 0
-        const comments = media.comments_count ?? 0
+        const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
-        const followsGained = 0 // Declare followsGained variable
 
         console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares })
 
