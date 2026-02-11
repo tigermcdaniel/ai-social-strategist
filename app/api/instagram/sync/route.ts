@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 
 const FB_API = "https://graph.facebook.com/v22.0"
-const IG_API = "https://graph.instagram.com/v22.0"
 
 interface IGMedia {
   id: string
@@ -31,91 +30,65 @@ async function apiFetch(url: string) {
   return data
 }
 
-// Strategy 1: Facebook Graph API - /me/accounts -> instagram_business_account
-async function tryFacebookPath(token: string): Promise<{ igId: string; api: string } | null> {
-  try {
-    console.log("[v0] Trying Facebook Graph API path...")
-    const pagesRes = await apiFetch(
-      `${FB_API}/me/accounts?fields=id,name,instagram_business_account,connected_page_backed_instagram_account&limit=100&access_token=${token}`
-    )
-    const pages = pagesRes.data ?? []
-    console.log("[v0] Found", pages.length, "Facebook Pages")
+// Discover IG account and get the Page access token (needed for media/insights)
+async function discoverIG(token: string): Promise<{
+  igId: string
+  pageToken: string
+  pageName: string
+} | null> {
+  console.log("[v0] Discovering IG account via Facebook Pages...")
 
-    for (const page of pages) {
-      // Check the newer connected_page_backed_instagram_account field first
-      if (page.connected_page_backed_instagram_account?.id) {
-        console.log("[v0] Found IG via connected_page_backed:", page.connected_page_backed_instagram_account.id, "on Page:", page.name)
-        return { igId: page.connected_page_backed_instagram_account.id, api: "facebook" }
-      }
-      // Fall back to the older instagram_business_account field
-      if (page.instagram_business_account?.id) {
-        console.log("[v0] Found IG Business Account:", page.instagram_business_account.id, "on Page:", page.name)
-        return { igId: page.instagram_business_account.id, api: "facebook" }
-      }
-    }
-
-    // Try querying each page explicitly with both fields
-    for (const page of pages) {
-      try {
-        const detail = await apiFetch(
-          `${FB_API}/${page.id}?fields=instagram_business_account,connected_page_backed_instagram_account&access_token=${token}`
-        )
-        if (detail.connected_page_backed_instagram_account?.id) {
-          return { igId: detail.connected_page_backed_instagram_account.id, api: "facebook" }
-        }
-        if (detail.instagram_business_account?.id) {
-          return { igId: detail.instagram_business_account.id, api: "facebook" }
-        }
-      } catch { /* skip */ }
-    }
-
-    console.log("[v0] No IG Business Account linked to any Facebook Page")
-    return null
-  } catch (err) {
-    console.log("[v0] Facebook path failed:", err)
-    return null
-  }
-}
-
-// Strategy 2: Instagram Graph API - /me directly (Instagram Login for Business)
-async function tryInstagramPath(token: string): Promise<{ igId: string; api: string } | null> {
-  try {
-    console.log("[v0] Trying Instagram API path (graph.instagram.com/me)...")
-    const meRes = await apiFetch(`${IG_API}/me?fields=user_id,username&access_token=${token}`)
-    const igId = meRes.user_id ?? meRes.id
-    if (igId) {
-      console.log("[v0] Found IG account via Instagram API:", igId, "username:", meRes.username)
-      return { igId, api: "instagram" }
-    }
-    return null
-  } catch (err) {
-    console.log("[v0] Instagram path failed:", err)
-    return null
-  }
-}
-
-// Fetch media - works with both APIs
-async function fetchMedia(igId: string, api: string, token: string): Promise<IGMedia[]> {
-  const baseUrl = api === "facebook" ? FB_API : IG_API
-  const fields = "id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type,like_count,comments_count"
-  const res = await apiFetch(
-    `${baseUrl}/${igId}/media?fields=${fields}&limit=50&access_token=${token}`
+  const pagesRes = await apiFetch(
+    `${FB_API}/me/accounts?fields=id,name,access_token,instagram_business_account,connected_page_backed_instagram_account&limit=100&access_token=${token}`
   )
+  const pages = pagesRes.data ?? []
+  console.log("[v0] Found", pages.length, "Facebook Pages")
+
+  for (const page of pages) {
+    const igId =
+      page.connected_page_backed_instagram_account?.id ??
+      page.instagram_business_account?.id
+    if (igId) {
+      console.log("[v0] Found IG account:", igId, "on Page:", page.name, "(using page token)")
+      return { igId, pageToken: page.access_token, pageName: page.name }
+    }
+  }
+
+  // Explicit query per page
+  for (const page of pages) {
+    try {
+      const detail = await apiFetch(
+        `${FB_API}/${page.id}?fields=instagram_business_account,connected_page_backed_instagram_account&access_token=${token}`
+      )
+      const igId =
+        detail.connected_page_backed_instagram_account?.id ??
+        detail.instagram_business_account?.id
+      if (igId) {
+        console.log("[v0] Found IG account (explicit):", igId, "on Page:", page.name)
+        return { igId, pageToken: page.access_token, pageName: page.name }
+      }
+    } catch { /* skip */ }
+  }
+
+  return null
+}
+
+// Fetch media using the Page token
+async function fetchMedia(igId: string, pageToken: string): Promise<IGMedia[]> {
+  const fields = "id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type,like_count,comments_count"
+  const url = `${FB_API}/${igId}/media?fields=${fields}&limit=50&access_token=${pageToken}`
+  const res = await apiFetch(url)
   return res.data ?? []
 }
 
-// Fetch insights for a single media item
-async function fetchInsights(mediaId: string, mediaType: string, productType: string | undefined, api: string, token: string): Promise<Record<string, number>> {
-  const baseUrl = api === "facebook" ? FB_API : IG_API
+// Fetch insights for a single media using the Page token
+async function fetchInsights(mediaId: string, mediaType: string, productType: string | undefined, pageToken: string): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Different metrics available depending on media type
   let metrics: string[]
   if (productType === "REELS") {
     metrics = ["reach", "likes", "comments", "saved", "shares", "total_interactions"]
   } else if (mediaType === "VIDEO") {
-    metrics = ["impressions", "reach", "likes", "comments", "saved", "shares"]
-  } else if (mediaType === "CAROUSEL_ALBUM") {
     metrics = ["impressions", "reach", "likes", "comments", "saved", "shares"]
   } else {
     metrics = ["impressions", "reach", "likes", "comments", "saved", "shares"]
@@ -123,13 +96,13 @@ async function fetchInsights(mediaId: string, mediaType: string, productType: st
 
   try {
     const res = await apiFetch(
-      `${baseUrl}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${token}`
+      `${FB_API}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${pageToken}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
   } catch (err) {
-    console.log("[v0] Insights fetch failed for", mediaId, "- falling back to basic metrics")
+    console.log("[v0] Insights failed for", mediaId, "- using basic counts only")
   }
 
   return insights
@@ -151,23 +124,20 @@ export async function POST() {
   const testUserId = "test-user-00000000-0000-0000-0000-000000000000"
 
   try {
-    // Try both API paths - Facebook first, then Instagram
-    let result = await tryFacebookPath(token)
-    if (!result) {
-      result = await tryInstagramPath(token)
-    }
+    const discovery = await discoverIG(token)
 
-    if (!result) {
+    if (!discovery) {
       return Response.json({
-        error: "Could not find your Instagram account. Token may not have instagram_basic or instagram_business_basic permissions. Check /api/instagram/debug for details."
+        error: "No Instagram account linked to your Facebook Pages. Make sure your IG Business/Creator account is connected to a Facebook Page.",
+        hint: "Check /api/instagram/debug for details about your token and pages.",
       }, { status: 400 })
     }
 
-    const { igId, api } = result
-    console.log("[v0] Using", api, "API with IG account:", igId)
+    const { igId, pageToken, pageName } = discovery
+    console.log("[v0] Using Page token from:", pageName, "for IG account:", igId)
 
-    // Fetch all recent media
-    const mediaItems = await fetchMedia(igId, api, token)
+    // Fetch media using the Page token (works with pages_read_engagement)
+    const mediaItems = await fetchMedia(igId, pageToken)
     console.log("[v0] Fetched", mediaItems.length, "media items")
 
     if (mediaItems.length === 0) {
@@ -179,8 +149,8 @@ export async function POST() {
 
     for (const media of mediaItems) {
       try {
-        // Fetch insights
-        const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, api, token)
+        // Fetch insights using Page token (works with read_insights)
+        const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, pageToken)
 
         const views = insights.impressions ?? insights.views ?? 0
         const reach = insights.reach ?? 0
@@ -217,7 +187,7 @@ export async function POST() {
           thumbnail_url: media.thumbnail_url ?? null,
         }
 
-        // Upsert - update if exists, insert if not
+        // Upsert
         const { data: existing } = await supabase
           .from("posts")
           .select("id")
@@ -242,7 +212,7 @@ export async function POST() {
       errors,
       total: mediaItems.length,
       igAccountId: igId,
-      apiUsed: api,
+      pageName,
       message: `Synced ${synced} posts from Instagram${errors > 0 ? ` (${errors} errors)` : ""}`,
     })
   } catch (err) {
