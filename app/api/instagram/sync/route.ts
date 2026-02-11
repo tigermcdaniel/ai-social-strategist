@@ -75,7 +75,7 @@ async function fetchInsights(
   // saved, shares, reach (likes/comments come from media fields instead)
   try {
     const res = await apiFetch(
-      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments&access_token=${token}`
+      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
@@ -169,10 +169,9 @@ export async function POST() {
         const insights = await fetchInsights(media.id, workingToken, workingApiBase)
         console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
-        // reach = unique accounts that saw the post (use as views)
-        // plays only available for reels/video, use reach as fallback
+        // views = total times displayed/played, reach = unique accounts
+        const views = insights.views ?? insights.plays ?? 0
         const reach = insights.reach ?? 0
-        const views = insights.plays ?? reach
         const likes = media.like_count ?? 0
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
