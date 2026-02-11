@@ -171,10 +171,10 @@ export async function POST() {
         const insights = await fetchInsights(media.id, workingToken, workingApiBase)
         console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
-        // likes from media fields, comments/saved/shares/reach from insights
-        // plays (views) from insights when available (reels/video)
-        const views = insights.plays ?? 0
+        // reach = unique accounts that saw the post (use as views)
+        // plays only available for reels/video, use reach as fallback
         const reach = insights.reach ?? 0
+        const views = insights.plays ?? reach
         const likes = media.like_count ?? 0
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
