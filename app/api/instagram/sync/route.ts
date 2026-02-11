@@ -235,7 +235,16 @@ export async function POST() {
         console.log("[v0] Post data to upsert:", JSON.stringify(postData))
 
         if (existing) {
-          const { error } = await supabase.from("posts").update(postData).eq("instagram_media_id", media.id)
+          // Only update fields that have actual data - don't overwrite good data with zeros
+          const updateData: Record<string, unknown> = { ...postData }
+          if (views === 0) delete updateData.views
+          if (reach === 0) delete updateData.reach
+          if (saves === 0) delete updateData.saves
+          if (shares === 0) delete updateData.shares
+          if (comments === 0) delete updateData.comments
+          if (followerSnapshot === 0) delete updateData.follower_count_snapshot
+
+          const { error } = await supabase.from("posts").update(updateData).eq("instagram_media_id", media.id)
           if (error) {
             const msg = `Update ${media.id}: ${error.message} (code: ${error.code}, details: ${error.details})`
             console.log("[v0] DB Update error:", msg)
