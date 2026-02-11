@@ -83,15 +83,7 @@ async function fetchInsights(
     console.log("[v0] Batch 1 failed:", err instanceof Error ? err.message : String(err))
   }
 
-  // Batch 2: follows (may not work for all media types)
-  try {
-    const res = await apiFetch(
-      `${FB_API}/${mediaId}/insights?metric=follows&access_token=${token}`
-    )
-    for (const item of (res.data ?? []) as IGInsight[]) {
-      insights[item.name] = item.values?.[0]?.value ?? 0
-    }
-  } catch { /* follows not available for this post */ }
+  // Note: follows is fetched at account level, not per-media
 
   // Reels-specific metrics (separate call, non-fatal)
   try {
@@ -164,6 +156,16 @@ export async function POST() {
       return Response.json({ synced: 0, message: "No media found on this Instagram account" })
     }
 
+    // Fetch account-level follower count (this is the real snapshot)
+    let accountFollowerCount = 0
+    try {
+      const accountRes = await apiFetch(`${FB_API}/${igId}?fields=followers_count&access_token=${pageToken}`)
+      accountFollowerCount = accountRes.followers_count ?? 0
+      console.log("[v0] Account follower count:", accountFollowerCount)
+    } catch (err) {
+      console.log("[v0] Could not fetch account follower count:", err instanceof Error ? err.message : String(err))
+    }
+
     const testBatch = mediaItems.slice(0, 15)
 
     let synced = 0
@@ -182,7 +184,7 @@ export async function POST() {
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
-        const followerSnapshot = insights.follows ?? 0
+        const followerSnapshot = accountFollowerCount
         const profileVisits = insights.profile_visits ?? 0
         const totalInteractionsIG = insights.total_interactions ?? 0
         const replays = insights.clips_replays_count ?? 0

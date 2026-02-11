@@ -7,9 +7,10 @@ interface StatCardProps {
   change?: string
   changeType?: "positive" | "negative" | "neutral"
   icon: LucideIcon
+  subtitle?: string
 }
 
-export function StatCard({ label, value, change, changeType = "neutral", icon: Icon }: StatCardProps) {
+export function StatCard({ label, value, change, changeType = "neutral", icon: Icon, subtitle }: StatCardProps) {
   return (
     <Card className="border-border bg-card">
       <CardContent className="p-4">
@@ -17,6 +18,9 @@ export function StatCard({ label, value, change, changeType = "neutral", icon: I
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">{label}</span>
             <span className="text-2xl font-semibold tracking-tight text-foreground">{value}</span>
+            {subtitle && (
+              <span className="text-xs text-muted-foreground">{subtitle}</span>
+            )}
             {change && (
               <span
                 className={`text-xs font-medium ${

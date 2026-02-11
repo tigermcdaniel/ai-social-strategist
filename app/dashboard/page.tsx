@@ -80,10 +80,17 @@ export default async function OverviewPage() {
   const totalLikes = allPosts.reduce((s, p) => s + (p.likes ?? 0), 0)
   const totalSaves = allPosts.reduce((s, p) => s + (p.saves ?? 0), 0)
   const totalShares = allPosts.reduce((s, p) => s + (p.shares ?? 0), 0)
-  const totalFollows = allPosts.reduce(
-    (s, p) => s + (p.follows_gained ?? 0),
-    0,
+  // Follower change: delta between earliest and latest post's follower snapshot
+  const postsWithSnapshot = allPosts.filter((p) => (p.follower_count_snapshot ?? 0) > 0)
+  const sortedByDate = [...postsWithSnapshot].sort(
+    (a, b) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime()
   )
+  const followerChange = sortedByDate.length >= 2
+    ? sortedByDate[sortedByDate.length - 1].follower_count_snapshot - sortedByDate[0].follower_count_snapshot
+    : 0
+  const currentFollowers = sortedByDate.length > 0
+    ? sortedByDate[sortedByDate.length - 1].follower_count_snapshot
+    : 0
   const avgEngagement =
     allPosts.length > 0
       ? allPosts.reduce((s, p) => s + Number(p.engagement_rate ?? 0), 0) /
@@ -157,8 +164,26 @@ export default async function OverviewPage() {
   // Extract viral opportunities from the latest report's content_mix
   const viralOpportunities = latestReport?.content_mix?.viral_opportunities ?? []
 
+  // Time period
+  const dateRange = allPosts.length > 0
+    ? {
+        from: format(new Date(allPosts[allPosts.length - 1].post_date), "MMM d"),
+        to: format(new Date(allPosts[0].post_date), "MMM d, yyyy"),
+        count: allPosts.length,
+      }
+    : null
+
   return (
     <div className="flex flex-col gap-6">
+      {/* Time period header */}
+      {dateRange && (
+        <p className="text-sm text-muted-foreground">
+          Showing data from <span className="font-medium text-foreground">{dateRange.from}</span> to{" "}
+          <span className="font-medium text-foreground">{dateRange.to}</span>{" "}
+          ({dateRange.count} posts)
+        </p>
+      )}
+
       {/* Hero: Virality Score + Key Viral Metrics */}
       <div className="grid gap-4 lg:grid-cols-3">
         <ViralityScore
@@ -190,9 +215,10 @@ export default async function OverviewPage() {
             icon={Share2}
           />
           <StatCard
-            label="Follows Gained"
-            value={totalFollows.toLocaleString()}
+            label="Followers"
+            value={currentFollowers > 0 ? currentFollowers.toLocaleString() : "--"}
             icon={Users}
+            subtitle={followerChange !== 0 ? `${followerChange > 0 ? "+" : ""}${followerChange} change` : undefined}
           />
           <StatCard
             label="Avg. Engagement"
