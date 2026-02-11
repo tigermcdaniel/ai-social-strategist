@@ -66,52 +66,34 @@ async function fetchMedia(igId: string, token: string): Promise<{ media: IGMedia
 
 async function fetchInsights(
   mediaId: string,
-  mediaType: string,
-  productType: string | undefined,
   token: string,
   apiBase: string = FB_API
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Try multiple metric sets - the available metrics depend on media type and API version
-  const metricSets: string[][] = []
-
-  if (productType === "REELS") {
-    metricSets.push(
-      ["plays", "reach", "saved", "shares", "total_interactions", "likes", "comments"],
-      ["ig_reels_video_view_total_time", "reach", "saved", "shares", "likes", "comments"],
-      ["reach", "saved", "shares"],
+  // Only request metrics that the IG API actually returns via insights:
+  // saved, shares, reach (likes/comments come from media fields instead)
+  try {
+    const res = await apiFetch(
+      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach&access_token=${token}`
     )
-  } else if (mediaType === "VIDEO") {
-    metricSets.push(
-      ["impressions", "reach", "saved", "shares", "likes", "comments"],
-      ["reach", "saved", "shares"],
-    )
-  } else if (mediaType === "CAROUSEL_ALBUM") {
-    metricSets.push(
-      ["impressions", "reach", "saved", "shares", "likes", "comments"],
-      ["reach", "saved", "shares"],
-    )
-  } else {
-    metricSets.push(
-      ["impressions", "reach", "saved", "shares", "likes", "comments"],
-      ["reach", "saved", "shares"],
-    )
+    for (const item of (res.data ?? []) as IGInsight[]) {
+      insights[item.name] = item.values?.[0]?.value ?? 0
+    }
+  } catch (err) {
+    console.log("[v0] Insights failed for", mediaId, "-", err instanceof Error ? err.message : String(err))
   }
 
-  for (const metrics of metricSets) {
-    try {
-      const res = await apiFetch(
-        `${apiBase}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${token}`
-      )
-      for (const item of (res.data ?? []) as IGInsight[]) {
-        insights[item.name] = item.values?.[0]?.value ?? 0
-      }
-      console.log("[v0] Insights succeeded with metrics:", metrics.join(","), "->", JSON.stringify(insights))
-      break // success, stop trying other metric sets
-    } catch (err) {
-      console.log("[v0] Insights attempt failed for", mediaId, "with metrics:", metrics.join(","), "-", err instanceof Error ? err.message : String(err))
+  // Also try to get views/plays separately (available for reels/video)
+  try {
+    const res = await apiFetch(
+      `${apiBase}/${mediaId}/insights?metric=plays&access_token=${token}`
+    )
+    for (const item of (res.data ?? []) as IGInsight[]) {
+      insights[item.name] = item.values?.[0]?.value ?? 0
     }
+  } catch {
+    // plays not available for this media type - that's fine
   }
 
   return insights
@@ -185,21 +167,22 @@ export async function POST() {
 
     for (const media of testBatch) {
       try {
-        console.log("[v0] Processing media:", media.id, "type:", media.media_type, "product_type:", media.media_product_type)
-        const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, workingToken, workingApiBase)
+        console.log("[v0] Processing media:", media.id, "type:", media.media_type, "like_count:", media.like_count, "comments_count:", media.comments_count)
+        const insights = await fetchInsights(media.id, workingToken, workingApiBase)
         console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
-        // Views: impressions > plays > total_interactions as proxy
-        const views = insights.impressions ?? insights.plays ?? insights.ig_reels_video_view_total_time ?? 0
+        // likes + comments come from media fields (always available)
+        // saved, shares, reach come from insights endpoint
+        // plays (views) come from insights when available (reels/video)
+        const views = insights.plays ?? 0
         const reach = insights.reach ?? 0
-        // Likes/comments: prefer the media object counts (always available), insights may not include them
-        const likes = media.like_count ?? insights.likes ?? 0
-        const comments = media.comments_count ?? insights.comments ?? 0
+        const likes = media.like_count ?? 0
+        const comments = media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
-        const followsGained = insights.follows ?? 0
+        const followsGained = 0 // Declare followsGained variable
 
-        console.log("[v0] Mapped metrics for", media.id, "-> views:", views, "reach:", reach, "likes:", likes, "comments:", comments, "saves:", saves, "shares:", shares)
+        console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares })
 
         const totalInteractions = likes + comments + saves + shares
         const engagementRate = reach > 0 ? Number(((totalInteractions / reach) * 100).toFixed(4)) : 0
@@ -219,7 +202,7 @@ export async function POST() {
           comments,
           saves,
           shares,
-          follows_gained: followsGained,
+          follows_gained: 0,
           engagement_rate: engagementRate,
           save_rate: saveRate,
           share_rate: shareRate,
