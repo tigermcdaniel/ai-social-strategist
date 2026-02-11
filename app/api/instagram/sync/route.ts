@@ -71,39 +71,62 @@ async function fetchInsights(
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Core metrics available on all media types
-  try {
-    const res = await apiFetch(
-      `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows,total_interactions,profile_visits&access_token=${token}`
-    )
-    for (const item of (res.data ?? []) as IGInsight[]) {
-      insights[item.name] = item.values?.[0]?.value ?? 0
-    }
-  } catch (err) {
-    // Some metrics may not be available on all media types - try a smaller set
-    console.log("[v0] Full insights failed for", mediaId, "- trying core set")
+  // Try insights with the given token and API base, then fall back to other combos
+  const tokenCombos = [
+    { t: token, base: apiBase },
+    { t: token, base: FB_API },
+    { t: token, base: IG_API },
+  ]
+
+  // Also try the other token if available
+  const pageToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN
+  const userToken = process.env.INSTAGRAM_ACCESS_TOKEN
+  if (userToken && userToken !== token) {
+    tokenCombos.push({ t: userToken, base: FB_API }, { t: userToken, base: IG_API })
+  }
+  if (pageToken && pageToken !== token) {
+    tokenCombos.push({ t: pageToken, base: FB_API }, { t: pageToken, base: IG_API })
+  }
+
+  let gotCoreInsights = false
+  for (const combo of tokenCombos) {
+    if (gotCoreInsights) break
     try {
       const res = await apiFetch(
-        `${apiBase}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows&access_token=${token}`
+        `${combo.base}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows&access_token=${combo.t}`
       )
       for (const item of (res.data ?? []) as IGInsight[]) {
         insights[item.name] = item.values?.[0]?.value ?? 0
       }
-    } catch (err2) {
-      console.log("[v0] Core insights also failed for", mediaId, "-", err2 instanceof Error ? err2.message : String(err2))
+      console.log("[v0] Insights succeeded via", combo.base, "- got:", Object.keys(insights).join(","))
+      gotCoreInsights = true
+    } catch (err) {
+      console.log("[v0] Insights failed via", combo.base, "-", err instanceof Error ? err.message : String(err))
     }
   }
 
-  // Reels-specific metrics (replays, avg watch time, total view time)
-  try {
-    const res = await apiFetch(
-      `${apiBase}/${mediaId}/insights?metric=clips_replays_count,ig_reels_avg_watch_time,ig_reels_video_view_total_time&access_token=${token}`
-    )
-    for (const item of (res.data ?? []) as IGInsight[]) {
-      insights[item.name] = item.values?.[0]?.value ?? 0
-    }
-  } catch {
-    // Not a reel or metrics unavailable - that's fine
+  // Try richer metrics with the combo that worked (or first combo)
+  if (gotCoreInsights) {
+    try {
+      const workingCombo = tokenCombos[0]
+      const res = await apiFetch(
+        `${workingCombo.base}/${mediaId}/insights?metric=total_interactions,profile_visits&access_token=${workingCombo.t}`
+      )
+      for (const item of (res.data ?? []) as IGInsight[]) {
+        insights[item.name] = item.values?.[0]?.value ?? 0
+      }
+    } catch { /* not available for this media type */ }
+
+    // Reels-specific
+    try {
+      const workingCombo = tokenCombos[0]
+      const res = await apiFetch(
+        `${workingCombo.base}/${mediaId}/insights?metric=clips_replays_count,ig_reels_avg_watch_time,ig_reels_video_view_total_time&access_token=${workingCombo.t}`
+      )
+      for (const item of (res.data ?? []) as IGInsight[]) {
+        insights[item.name] = item.values?.[0]?.value ?? 0
+      }
+    } catch { /* not a reel */ }
   }
 
   return insights
@@ -191,9 +214,6 @@ export async function POST() {
         const replays = insights.clips_replays_count ?? 0
         const avgWatchTime = insights.ig_reels_avg_watch_time ?? 0
         const videoViewTotalTime = insights.ig_reels_video_view_total_time ?? 0
-
-        // Declare followsGained variable
-        const followsGained = 0; // Placeholder value, as the actual value is not provided in the diff
 
         console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares, followerSnapshot, profileVisits, replays })
 
