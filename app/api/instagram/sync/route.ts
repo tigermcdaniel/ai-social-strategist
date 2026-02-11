@@ -157,9 +157,7 @@ export async function POST() {
       return Response.json({ synced: 0, message: "No media found on this Instagram account" })
     }
 
-    // Limit to 2 posts for initial testing
-    const testBatch = mediaItems.slice(0, 2)
-    console.log("[v0] Processing", testBatch.length, "posts (limited for testing)")
+    const testBatch = mediaItems.slice(0, 15)
 
     let synced = 0
     let errors = 0
