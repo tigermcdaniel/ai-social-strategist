@@ -32,7 +32,12 @@ export function InstagramSyncButton({ onSyncComplete }: { onSyncComplete?: () =>
       }
 
       setLastResult(data)
-      toast.success(data.message)
+      if (data.errorDetails?.length > 0) {
+        console.log("[v0] Error details:", data.errorDetails)
+        toast.error(`Errors: ${data.errorDetails[0]}`)
+      }
+      if (data.synced > 0) toast.success(data.message)
+      else if (!data.errorDetails?.length) toast.success(data.message)
       onSyncComplete?.()
     } catch (err) {
       console.log("[v0] Sync fetch error:", err)

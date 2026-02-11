@@ -154,12 +154,19 @@ export async function POST() {
       return Response.json({ synced: 0, message: "No media found on this Instagram account" })
     }
 
+    // Limit to 2 posts for initial testing
+    const testBatch = mediaItems.slice(0, 2)
+    console.log("[v0] Processing", testBatch.length, "posts (limited for testing)")
+
     let synced = 0
     let errors = 0
+    const errorDetails: string[] = []
 
-    for (const media of mediaItems) {
+    for (const media of testBatch) {
       try {
+        console.log("[v0] Processing media:", media.id, "type:", media.media_type, "product_type:", media.media_product_type)
         const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, workingToken, workingApiBase)
+        console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
 
         const views = insights.impressions ?? insights.views ?? 0
         const reach = insights.reach ?? 0
@@ -203,15 +210,29 @@ export async function POST() {
           .eq("instagram_media_id", media.id)
           .maybeSingle()
 
+        console.log("[v0] Post data to upsert:", JSON.stringify(postData))
+
         if (existing) {
           const { error } = await supabase.from("posts").update(postData).eq("instagram_media_id", media.id)
-          if (error) { console.log("[v0] Update error:", error); errors++ } else { synced++ }
+          if (error) {
+            const msg = `Update ${media.id}: ${error.message} (code: ${error.code}, details: ${error.details})`
+            console.log("[v0] DB Update error:", msg)
+            errorDetails.push(msg)
+            errors++
+          } else { synced++ }
         } else {
           const { error } = await supabase.from("posts").insert(postData)
-          if (error) { console.log("[v0] Insert error:", error); errors++ } else { synced++ }
+          if (error) {
+            const msg = `Insert ${media.id}: ${error.message} (code: ${error.code}, details: ${error.details})`
+            console.log("[v0] DB Insert error:", msg)
+            errorDetails.push(msg)
+            errors++
+          } else { synced++ }
         }
       } catch (mediaErr) {
-        console.log("[v0] Error processing media", media.id, mediaErr)
+        const msg = `Catch ${media.id}: ${mediaErr instanceof Error ? mediaErr.message : String(mediaErr)}`
+        console.log("[v0] Error processing media:", msg)
+        errorDetails.push(msg)
         errors++
       }
     }
@@ -221,8 +242,9 @@ export async function POST() {
     return Response.json({
       synced,
       errors,
-      total: mediaItems.length,
+      total: testBatch.length,
       igAccountId: igId,
+      errorDetails: errorDetails.slice(0, 5),
       message: `Synced ${synced} posts from Instagram${errors > 0 ? ` (${errors} errors)` : ""}`,
     })
   } catch (err) {
