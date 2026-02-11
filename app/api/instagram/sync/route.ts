@@ -185,14 +185,17 @@ export async function POST() {
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
-        const followsGained = insights.follows ?? 0
+        const followerSnapshot = insights.follows ?? 0
         const profileVisits = insights.profile_visits ?? 0
         const totalInteractionsIG = insights.total_interactions ?? 0
         const replays = insights.clips_replays_count ?? 0
         const avgWatchTime = insights.ig_reels_avg_watch_time ?? 0
         const videoViewTotalTime = insights.ig_reels_video_view_total_time ?? 0
 
-        console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares, followsGained, profileVisits, replays })
+        // Declare followsGained variable
+        const followsGained = 0; // Placeholder value, as the actual value is not provided in the diff
+
+        console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares, followerSnapshot, profileVisits, replays })
 
         const totalInteractions = totalInteractionsIG > 0 ? totalInteractionsIG : (likes + comments + saves + shares)
         const engagementRate = reach > 0 ? Number(((totalInteractions / reach) * 100).toFixed(4)) : 0
@@ -212,7 +215,8 @@ export async function POST() {
           comments,
           saves,
           shares,
-          follows_gained: followsGained,
+          follower_count_snapshot: followerSnapshot,
+          follows_gained: 0,
           profile_visits: profileVisits,
           total_interactions: totalInteractions,
           replays,
@@ -258,6 +262,25 @@ export async function POST() {
         errorDetails.push(msg)
         errors++
       }
+    }
+
+    // Compute follows_gained as deltas between consecutive posts
+    const { data: allPosts } = await supabase
+      .from("posts")
+      .select("id, post_date, follower_count_snapshot")
+      .eq("user_id", testUserId)
+      .gt("follower_count_snapshot", 0)
+      .order("post_date", { ascending: true })
+
+    if (allPosts && allPosts.length > 1) {
+      for (let i = 1; i < allPosts.length; i++) {
+        const delta = allPosts[i].follower_count_snapshot - allPosts[i - 1].follower_count_snapshot
+        await supabase
+          .from("posts")
+          .update({ follows_gained: Math.max(delta, 0) })
+          .eq("id", allPosts[i].id)
+      }
+      console.log("[v0] Computed follower deltas for", allPosts.length - 1, "posts")
     }
 
     console.log("[v0] Sync complete:", synced, "synced,", errors, "errors")
