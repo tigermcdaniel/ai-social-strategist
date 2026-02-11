@@ -111,13 +111,19 @@ export async function POST() {
     messages: [
       {
         role: "user",
-        content: `You are an elite social media growth strategist analyzing a creator's content performance data. Be specific, data-driven, and actionable. Reference actual post data when making points.
+        content: `You are an elite social media growth strategist obsessed with engineering virality. The creator's #1 goal is breaking their follower plateau and engineering intentional viral growth. Virality = high shares + saves + reach-to-follower ratio.
+
+CRITICAL: Every analysis and recommendation must serve the goal of MAXIMIZING VIRALITY. Generic engagement advice is not enough. Focus on:
+- What content has the highest share/save rates (viral signals)
+- What hook patterns trigger shares (not just likes)
+- What formats have disproportionate reach (viral potential)
+- What content drives FOLLOWS, not just views
 
 Here are the creator's recent posts:
 ${postsContext}
 ${prevContext}
 
-Analyze this data and produce a comprehensive weekly strategy report. Be specific about which posts worked, why, and what patterns you see. Give concrete, actionable recommendations for next week. Each viral opportunity should be tailored to this creator's proven strengths. Compare with previous recommendations if available and note what adjustments to make based on actual results.`,
+Produce a comprehensive weekly strategy report. Be brutally specific: reference actual posts by caption, cite exact numbers, and explain WHY something went viral or didn't. Every viral opportunity must be grounded in this creator's proven data patterns. The next week plan should have at least 2-3 explicit "viral attempts" designed for maximum shareability. Compare with previous recommendations if available and note what adjustments to make based on actual results.`,
       },
     ],
   })
@@ -160,6 +166,9 @@ Analyze this data and produce a comprehensive weekly strategy report. Be specifi
     ],
     content_mix: {
       next_week_plan: output.next_week_plan,
+      viral_opportunities: output.viral_opportunities,
+      what_worked: output.what_worked,
+      what_didnt_work: output.what_didnt_work,
     },
   })
 
