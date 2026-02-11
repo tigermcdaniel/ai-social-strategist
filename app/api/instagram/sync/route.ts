@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 
 const FB_API = "https://graph.facebook.com/v22.0"
+const IG_API = "https://graph.instagram.com/v22.0"
 const KNOWN_IG_ACCOUNT_ID = "17841444738724947"
 
 interface IGMedia {
@@ -43,18 +44,32 @@ function getToken(): { pageToken: string; userToken: string } {
   }
 }
 
-async function fetchMedia(igId: string, token: string): Promise<IGMedia[]> {
+async function fetchMedia(igId: string, token: string): Promise<{ media: IGMedia[]; apiBase: string }> {
   const fields = "id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type,like_count,comments_count"
-  const url = `${FB_API}/${igId}/media?fields=${fields}&limit=50&access_token=${token}`
+
+  // Try Facebook Graph API first
+  try {
+    console.log("[v0] Trying graph.facebook.com for media...")
+    const url = `${FB_API}/${igId}/media?fields=${fields}&limit=50&access_token=${token}`
+    const res = await apiFetch(url)
+    return { media: res.data ?? [], apiBase: FB_API }
+  } catch (fbErr) {
+    console.log("[v0] graph.facebook.com failed:", fbErr)
+  }
+
+  // Fall back to Instagram Graph API
+  console.log("[v0] Trying graph.instagram.com for media...")
+  const url = `${IG_API}/me/media?fields=${fields}&limit=50&access_token=${token}`
   const res = await apiFetch(url)
-  return res.data ?? []
+  return { media: res.data ?? [], apiBase: IG_API }
 }
 
 async function fetchInsights(
   mediaId: string,
   mediaType: string,
   productType: string | undefined,
-  token: string
+  token: string,
+  apiBase: string = FB_API
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
@@ -69,7 +84,7 @@ async function fetchInsights(
 
   try {
     const res = await apiFetch(
-      `${FB_API}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${token}`
+      `${apiBase}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
@@ -93,13 +108,47 @@ export async function POST() {
     const igId = KNOWN_IG_ACCOUNT_ID
 
     console.log("[v0] Starting sync for IG account:", igId)
+    console.log("[v0] Page token set:", !!process.env.INSTAGRAM_PAGE_ACCESS_TOKEN)
+    console.log("[v0] User token set:", !!process.env.INSTAGRAM_ACCESS_TOKEN)
 
     const supabase = await createClient()
     const testUserId = "test-user-00000000-0000-0000-0000-000000000000"
 
-    // Fetch media using the page token
-    const mediaItems = await fetchMedia(igId, pageToken)
-    console.log("[v0] Fetched", mediaItems.length, "media items")
+    // Step 1: Verify the token works by checking permissions
+    try {
+      const debugRes = await apiFetch(`${FB_API}/debug_token?input_token=${pageToken}&access_token=${pageToken}`)
+      console.log("[v0] Token debug - app_id:", debugRes.data?.app_id, "type:", debugRes.data?.type, "scopes:", debugRes.data?.scopes)
+    } catch (e) {
+      console.log("[v0] Token debug failed (non-fatal):", e)
+    }
+
+    // Step 2: Try fetching media with multiple token/API combos
+    let mediaItems: IGMedia[]
+    let workingApiBase = FB_API
+    let workingToken = pageToken
+
+    // Try page token first
+    try {
+      console.log("[v0] Trying media fetch with page token...")
+      const result = await fetchMedia(igId, pageToken)
+      mediaItems = result.media
+      workingApiBase = result.apiBase
+      workingToken = pageToken
+    } catch (pageErr) {
+      console.log("[v0] Page token failed:", pageErr)
+      // Try user token
+      const { userToken } = getToken()
+      if (userToken !== pageToken) {
+        console.log("[v0] Retrying with user token...")
+        const result = await fetchMedia(igId, userToken)
+        mediaItems = result.media
+        workingApiBase = result.apiBase
+        workingToken = userToken
+      } else {
+        throw pageErr
+      }
+    }
+    console.log("[v0] Fetched", mediaItems.length, "media items via", workingApiBase)
 
     if (mediaItems.length === 0) {
       return Response.json({ synced: 0, message: "No media found on this Instagram account" })
@@ -110,7 +159,7 @@ export async function POST() {
 
     for (const media of mediaItems) {
       try {
-        const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, pageToken)
+        const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, workingToken, workingApiBase)
 
         const views = insights.impressions ?? insights.views ?? 0
         const reach = insights.reach ?? 0
