@@ -112,7 +112,7 @@ export async function POST() {
     console.log("[v0] User token set:", !!process.env.INSTAGRAM_ACCESS_TOKEN)
 
     const supabase = await createClient()
-    const testUserId = "test-user-00000000-0000-0000-0000-000000000000"
+    const testUserId = "00000000-0000-0000-0000-000000000000"
 
     // Step 1: Verify the token works by checking permissions
     try {

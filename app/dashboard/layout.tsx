@@ -14,7 +14,7 @@ export default async function DashboardLayout({
 
   // Bypass auth for testing - pass real user or a mock
   const displayUser = user ?? ({
-    id: "test-user-00000000-0000-0000-0000-000000000000",
+    id: "00000000-0000-0000-0000-000000000000",
     email: "tester@growthpulse.dev",
   } as any)
 

@@ -7,7 +7,7 @@ export default async function PostsPage() {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const testUserId = user?.id ?? "test-user-00000000-0000-0000-0000-000000000000"
+  const testUserId = user?.id ?? "00000000-0000-0000-0000-000000000000"
 
   const { data: posts } = await supabase
     .from("posts")
