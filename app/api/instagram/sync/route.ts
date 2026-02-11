@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 
 const FB_API = "https://graph.facebook.com/v22.0"
+const KNOWN_IG_ACCOUNT_ID = "17841444738724947"
 
 interface IGMedia {
   id: string
@@ -30,59 +31,31 @@ async function apiFetch(url: string) {
   return data
 }
 
-// Discover IG account and get the Page access token (needed for media/insights)
-async function discoverIG(token: string): Promise<{
-  igId: string
-  pageToken: string
-  pageName: string
-} | null> {
-  console.log("[v0] Discovering IG account via Facebook Pages...")
-
-  const pagesRes = await apiFetch(
-    `${FB_API}/me/accounts?fields=id,name,access_token,instagram_business_account,connected_page_backed_instagram_account&limit=100&access_token=${token}`
-  )
-  const pages = pagesRes.data ?? []
-  console.log("[v0] Found", pages.length, "Facebook Pages")
-
-  for (const page of pages) {
-    const igId =
-      page.connected_page_backed_instagram_account?.id ??
-      page.instagram_business_account?.id
-    if (igId) {
-      console.log("[v0] Found IG account:", igId, "on Page:", page.name, "(using page token)")
-      return { igId, pageToken: page.access_token, pageName: page.name }
-    }
+function getToken(): { pageToken: string; userToken: string } {
+  const pageToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN
+  const userToken = process.env.INSTAGRAM_ACCESS_TOKEN
+  if (!pageToken && !userToken) {
+    throw new Error("No access token set. Add INSTAGRAM_PAGE_ACCESS_TOKEN or INSTAGRAM_ACCESS_TOKEN.")
   }
-
-  // Explicit query per page
-  for (const page of pages) {
-    try {
-      const detail = await apiFetch(
-        `${FB_API}/${page.id}?fields=instagram_business_account,connected_page_backed_instagram_account&access_token=${token}`
-      )
-      const igId =
-        detail.connected_page_backed_instagram_account?.id ??
-        detail.instagram_business_account?.id
-      if (igId) {
-        console.log("[v0] Found IG account (explicit):", igId, "on Page:", page.name)
-        return { igId, pageToken: page.access_token, pageName: page.name }
-      }
-    } catch { /* skip */ }
+  return {
+    pageToken: pageToken ?? userToken!,
+    userToken: userToken ?? pageToken!,
   }
-
-  return null
 }
 
-// Fetch media using the Page token
-async function fetchMedia(igId: string, pageToken: string): Promise<IGMedia[]> {
+async function fetchMedia(igId: string, token: string): Promise<IGMedia[]> {
   const fields = "id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type,like_count,comments_count"
-  const url = `${FB_API}/${igId}/media?fields=${fields}&limit=50&access_token=${pageToken}`
+  const url = `${FB_API}/${igId}/media?fields=${fields}&limit=50&access_token=${token}`
   const res = await apiFetch(url)
   return res.data ?? []
 }
 
-// Fetch insights for a single media using the Page token
-async function fetchInsights(mediaId: string, mediaType: string, productType: string | undefined, pageToken: string): Promise<Record<string, number>> {
+async function fetchInsights(
+  mediaId: string,
+  mediaType: string,
+  productType: string | undefined,
+  token: string
+): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
   let metrics: string[]
@@ -96,13 +69,13 @@ async function fetchInsights(mediaId: string, mediaType: string, productType: st
 
   try {
     const res = await apiFetch(
-      `${FB_API}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${pageToken}`
+      `${FB_API}/${mediaId}/insights?metric=${metrics.join(",")}&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
   } catch (err) {
-    console.log("[v0] Insights failed for", mediaId, "- using basic counts only")
+    console.log("[v0] Insights failed for", mediaId, "- using basic counts")
   }
 
   return insights
@@ -115,28 +88,16 @@ function mapFormat(mediaType: string, productType?: string): string {
 }
 
 export async function POST() {
-  const token = process.env.INSTAGRAM_ACCESS_TOKEN
-  if (!token) {
-    return Response.json({ error: "INSTAGRAM_ACCESS_TOKEN not set" }, { status: 500 })
-  }
-
-  const supabase = await createClient()
-  const testUserId = "test-user-00000000-0000-0000-0000-000000000000"
-
   try {
-    const discovery = await discoverIG(token)
+    const { pageToken } = getToken()
+    const igId = KNOWN_IG_ACCOUNT_ID
 
-    if (!discovery) {
-      return Response.json({
-        error: "No Instagram account linked to your Facebook Pages. Make sure your IG Business/Creator account is connected to a Facebook Page.",
-        hint: "Check /api/instagram/debug for details about your token and pages.",
-      }, { status: 400 })
-    }
+    console.log("[v0] Starting sync for IG account:", igId)
 
-    const { igId, pageToken, pageName } = discovery
-    console.log("[v0] Using Page token from:", pageName, "for IG account:", igId)
+    const supabase = await createClient()
+    const testUserId = "test-user-00000000-0000-0000-0000-000000000000"
 
-    // Fetch media using the Page token (works with pages_read_engagement)
+    // Fetch media using the page token
     const mediaItems = await fetchMedia(igId, pageToken)
     console.log("[v0] Fetched", mediaItems.length, "media items")
 
@@ -149,7 +110,6 @@ export async function POST() {
 
     for (const media of mediaItems) {
       try {
-        // Fetch insights using Page token (works with read_insights)
         const insights = await fetchInsights(media.id, media.media_type, media.media_product_type, pageToken)
 
         const views = insights.impressions ?? insights.views ?? 0
@@ -187,7 +147,7 @@ export async function POST() {
           thumbnail_url: media.thumbnail_url ?? null,
         }
 
-        // Upsert
+        // Upsert by instagram_media_id
         const { data: existing } = await supabase
           .from("posts")
           .select("id")
@@ -207,12 +167,13 @@ export async function POST() {
       }
     }
 
+    console.log("[v0] Sync complete:", synced, "synced,", errors, "errors")
+
     return Response.json({
       synced,
       errors,
       total: mediaItems.length,
       igAccountId: igId,
-      pageName,
       message: `Synced ${synced} posts from Instagram${errors > 0 ? ` (${errors} errors)` : ""}`,
     })
   } catch (err) {
