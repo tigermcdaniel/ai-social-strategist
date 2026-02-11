@@ -70,29 +70,28 @@ async function fetchInsights(
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Use the page token directly against graph.facebook.com
-  // Confirmed working: {mediaId}/insights?metric=saved,shares,reach,comments,views
+  // Batch 1: confirmed working metrics
   try {
     const res = await apiFetch(
-      `${FB_API}/${mediaId}/insights?metric=saved,shares,reach,comments,views,follows&access_token=${token}`
+      `${FB_API}/${mediaId}/insights?metric=views,likes,saved,shares,reach,comments&access_token=${token}`
     )
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
+    console.log("[v0] Batch 1 OK:", JSON.stringify(insights))
   } catch (err) {
-    // If follows causes issues, retry without it
-    console.log("[v0] Full insights failed, retrying without follows:", err instanceof Error ? err.message : String(err))
-    try {
-      const res = await apiFetch(
-        `${FB_API}/${mediaId}/insights?metric=saved,shares,reach,comments,views&access_token=${token}`
-      )
-      for (const item of (res.data ?? []) as IGInsight[]) {
-        insights[item.name] = item.values?.[0]?.value ?? 0
-      }
-    } catch (err2) {
-      console.log("[v0] Core insights also failed:", err2 instanceof Error ? err2.message : String(err2))
-    }
+    console.log("[v0] Batch 1 failed:", err instanceof Error ? err.message : String(err))
   }
+
+  // Batch 2: follows (may not work for all media types)
+  try {
+    const res = await apiFetch(
+      `${FB_API}/${mediaId}/insights?metric=follows&access_token=${token}`
+    )
+    for (const item of (res.data ?? []) as IGInsight[]) {
+      insights[item.name] = item.values?.[0]?.value ?? 0
+    }
+  } catch { /* follows not available for this post */ }
 
   // Reels-specific metrics (separate call, non-fatal)
   try {
@@ -179,7 +178,7 @@ export async function POST() {
 
         const views = insights.views ?? 0
         const reach = insights.reach ?? 0
-        const likes = media.like_count ?? 0
+        const likes = insights.likes ?? media.like_count ?? 0
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
