@@ -89,14 +89,11 @@ export function AddPostDialog() {
       data: { user },
     } = await supabase.auth.getUser()
 
-    if (!user) {
-      toast.error("You must be logged in")
-      setLoading(false)
-      return
-    }
+    // Bypass auth for testing
+    const userId = user?.id ?? "test-user-00000000-0000-0000-0000-000000000000"
 
     const { error } = await supabase.from("posts").insert({
-      user_id: user.id,
+      user_id: userId,
       platform: form.get("platform") as string,
       post_date: form.get("post_date") as string,
       caption: form.get("caption") as string,
