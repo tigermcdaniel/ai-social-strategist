@@ -36,24 +36,33 @@ async function tryFacebookPath(token: string): Promise<{ igId: string; api: stri
   try {
     console.log("[v0] Trying Facebook Graph API path...")
     const pagesRes = await apiFetch(
-      `${FB_API}/me/accounts?fields=id,name,instagram_business_account&limit=100&access_token=${token}`
+      `${FB_API}/me/accounts?fields=id,name,instagram_business_account,connected_page_backed_instagram_account&limit=100&access_token=${token}`
     )
     const pages = pagesRes.data ?? []
     console.log("[v0] Found", pages.length, "Facebook Pages")
 
     for (const page of pages) {
+      // Check the newer connected_page_backed_instagram_account field first
+      if (page.connected_page_backed_instagram_account?.id) {
+        console.log("[v0] Found IG via connected_page_backed:", page.connected_page_backed_instagram_account.id, "on Page:", page.name)
+        return { igId: page.connected_page_backed_instagram_account.id, api: "facebook" }
+      }
+      // Fall back to the older instagram_business_account field
       if (page.instagram_business_account?.id) {
         console.log("[v0] Found IG Business Account:", page.instagram_business_account.id, "on Page:", page.name)
         return { igId: page.instagram_business_account.id, api: "facebook" }
       }
     }
 
-    // Try querying each page explicitly
+    // Try querying each page explicitly with both fields
     for (const page of pages) {
       try {
         const detail = await apiFetch(
-          `${FB_API}/${page.id}?fields=instagram_business_account&access_token=${token}`
+          `${FB_API}/${page.id}?fields=instagram_business_account,connected_page_backed_instagram_account&access_token=${token}`
         )
+        if (detail.connected_page_backed_instagram_account?.id) {
+          return { igId: detail.connected_page_backed_instagram_account.id, api: "facebook" }
+        }
         if (detail.instagram_business_account?.id) {
           return { igId: detail.instagram_business_account.id, api: "facebook" }
         }

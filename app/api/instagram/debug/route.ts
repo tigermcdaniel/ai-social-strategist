@@ -37,7 +37,7 @@ export async function GET() {
   // Test 3: Check pages + IG accounts
   try {
     const pagesRes = await fetch(
-      `https://graph.facebook.com/v22.0/me/accounts?fields=id,name,instagram_business_account&limit=10&access_token=${token}`,
+      `https://graph.facebook.com/v22.0/me/accounts?fields=id,name,instagram_business_account,connected_page_backed_instagram_account&limit=10&access_token=${token}`,
       { cache: "no-store" }
     )
     results.pagesStatus = pagesRes.status
