@@ -23,8 +23,10 @@ export function InstagramSyncButton({ onSyncComplete }: { onSyncComplete?: () =>
     try {
       const res = await fetch("/api/instagram/sync", { method: "POST" })
       const data = await res.json()
+      console.log("[v0] Sync response status:", res.status, "body:", JSON.stringify(data))
 
       if (!res.ok) {
+        console.log("[v0] Sync error:", data.error)
         toast.error(data.error ?? "Sync failed")
         return
       }
@@ -33,6 +35,7 @@ export function InstagramSyncButton({ onSyncComplete }: { onSyncComplete?: () =>
       toast.success(data.message)
       onSyncComplete?.()
     } catch (err) {
+      console.log("[v0] Sync fetch error:", err)
       toast.error("Failed to connect to Instagram API")
     } finally {
       setSyncing(false)

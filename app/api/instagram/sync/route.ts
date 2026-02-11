@@ -1,6 +1,12 @@
 import { createClient } from "@/lib/supabase/server"
 
-const IG_API_BASE = "https://graph.instagram.com/v22.0"
+const FB_API_BASE = "https://graph.facebook.com/v22.0"
+
+interface FBPage {
+  id: string
+  name: string
+  instagram_business_account?: { id: string }
+}
 
 interface IGMedia {
   id: string
@@ -12,25 +18,54 @@ interface IGMedia {
   media_product_type?: string
 }
 
-interface IGInsightValue {
-  value: number
-}
-
 interface IGInsight {
   name: string
-  values: IGInsightValue[]
+  values: { value: number }[]
 }
 
-async function fetchIG(path: string, token: string) {
+async function fetchFB(path: string, token: string) {
   const sep = path.includes("?") ? "&" : "?"
-  const url = `${IG_API_BASE}${path}${sep}access_token=${token}`
+  const url = `${FB_API_BASE}${path}${sep}access_token=${token}`
   const res = await fetch(url, { cache: "no-store" })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    console.log("[v0] IG API error:", res.status, JSON.stringify(err))
-    throw new Error(`Instagram API ${res.status}: ${JSON.stringify(err)}`)
+    console.log("[v0] FB API error:", res.status, JSON.stringify(err))
+    throw new Error(`Facebook API ${res.status}: ${JSON.stringify(err)}`)
   }
   return res.json()
+}
+
+async function discoverIGAccountId(token: string): Promise<string> {
+  // Step 1: Get all Facebook Pages the token has access to
+  const pagesRes = await fetchFB("/me/accounts?fields=id,name,instagram_business_account&limit=100", token)
+  const pages: FBPage[] = pagesRes.data ?? []
+
+  if (pages.length === 0) {
+    throw new Error("No Facebook Pages found for this access token. Make sure the token has pages_read_engagement permission.")
+  }
+
+  // Step 2: Find the first page with a linked Instagram Business Account
+  for (const page of pages) {
+    if (page.instagram_business_account?.id) {
+      console.log("[v0] Found IG Business Account", page.instagram_business_account.id, "on Page:", page.name)
+      return page.instagram_business_account.id
+    }
+  }
+
+  // Step 3: If none found inline, try querying each page explicitly
+  for (const page of pages) {
+    try {
+      const pageDetail = await fetchFB(`/${page.id}?fields=instagram_business_account`, token)
+      if (pageDetail.instagram_business_account?.id) {
+        console.log("[v0] Found IG Business Account", pageDetail.instagram_business_account.id, "on Page:", page.name)
+        return pageDetail.instagram_business_account.id
+      }
+    } catch {
+      // Skip pages we can't query
+    }
+  }
+
+  throw new Error("No Instagram Business Account linked to any of your Facebook Pages. Link your IG account to a Facebook Page first.")
 }
 
 function mapMediaTypeToFormat(mediaType: string, productType?: string): string {
@@ -39,17 +74,19 @@ function mapMediaTypeToFormat(mediaType: string, productType?: string): string {
   return "image"
 }
 
-// Metrics available per media type via Instagram API with Instagram Login
-const MEDIA_INSIGHTS: Record<string, string[]> = {
-  IMAGE: ["impressions", "reach", "likes", "comments", "saved", "shares", "follows", "total_interactions"],
-  VIDEO: ["impressions", "reach", "likes", "comments", "saved", "shares", "follows", "total_interactions"],
-  CAROUSEL_ALBUM: ["impressions", "reach", "likes", "comments", "saved", "shares", "follows", "total_interactions"],
-  REELS: ["reach", "likes", "comments", "saved", "shares", "follows", "total_interactions"],
-}
-
+// Metrics available via the Instagram Graph API (Facebook Login for Business)
 function getMetricsForMedia(mediaType: string, productType?: string): string[] {
-  if (productType === "REELS") return MEDIA_INSIGHTS.REELS
-  return MEDIA_INSIGHTS[mediaType] ?? MEDIA_INSIGHTS.IMAGE
+  if (productType === "REELS") {
+    return ["reach", "likes", "comments", "saved", "shares", "total_interactions"]
+  }
+  if (mediaType === "VIDEO") {
+    return ["impressions", "reach", "likes", "comments", "saved", "shares", "total_interactions"]
+  }
+  if (mediaType === "CAROUSEL_ALBUM") {
+    return ["impressions", "reach", "likes", "comments", "saved", "shares", "total_interactions"]
+  }
+  // IMAGE
+  return ["impressions", "reach", "likes", "comments", "saved", "shares", "total_interactions"]
 }
 
 export async function POST() {
@@ -62,20 +99,22 @@ export async function POST() {
   const testUserId = "test-user-00000000-0000-0000-0000-000000000000"
 
   try {
-    // Step 1: Fetch recent media (up to 50 posts)
-    const mediaRes = await fetchIG(
-      "/me/media?fields=id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type&limit=50",
+    // Step 1: Auto-discover the Instagram Business Account ID
+    const igAccountId = await discoverIGAccountId(token)
+
+    // Step 2: Fetch recent media from the IG Business Account
+    const mediaRes = await fetchFB(
+      `/${igAccountId}/media?fields=id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type&limit=50`,
       token
     )
     const mediaItems: IGMedia[] = mediaRes.data ?? []
-    console.log("[v0] Fetched", mediaItems.length, "media items from Instagram")
+    console.log("[v0] Fetched", mediaItems.length, "media items from IG account", igAccountId)
 
     if (mediaItems.length === 0) {
       return Response.json({ synced: 0, message: "No media found on this Instagram account" })
     }
 
     let synced = 0
-    let skipped = 0
     let errors = 0
 
     for (const media of mediaItems) {
@@ -87,12 +126,12 @@ export async function POST() {
           .eq("instagram_media_id", media.id)
           .maybeSingle()
 
-        // Step 2: Fetch insights for this media
+        // Fetch insights for this media
         const metrics = getMetricsForMedia(media.media_type, media.media_product_type)
-        let insights: Record<string, number> = {}
+        const insights: Record<string, number> = {}
 
         try {
-          const insightsRes = await fetchIG(
+          const insightsRes = await fetchFB(
             `/${media.id}/insights?metric=${metrics.join(",")}`,
             token
           )
@@ -101,11 +140,10 @@ export async function POST() {
             insights[insight.name] = insight.values?.[0]?.value ?? 0
           }
         } catch (insightErr) {
-          // Some media (stories, etc.) may not support insights - use 0s
           console.log("[v0] Could not fetch insights for media", media.id, insightErr)
         }
 
-        const views = insights.impressions ?? insights.views ?? 0
+        const views = insights.impressions ?? 0
         const reach = insights.reach ?? 0
         const likes = insights.likes ?? 0
         const comments = insights.comments ?? 0
@@ -141,7 +179,6 @@ export async function POST() {
         }
 
         if (existing) {
-          // Update existing post with fresh metrics
           const { error } = await supabase
             .from("posts")
             .update(postData)
@@ -154,7 +191,6 @@ export async function POST() {
             synced++
           }
         } else {
-          // Insert new post
           const { error } = await supabase
             .from("posts")
             .insert(postData)
@@ -174,9 +210,9 @@ export async function POST() {
 
     return Response.json({
       synced,
-      skipped,
       errors,
       total: mediaItems.length,
+      igAccountId,
       message: `Synced ${synced} posts from Instagram${errors > 0 ? `, ${errors} errors` : ""}`,
     })
   } catch (err) {
