@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
+import { getInstagramTokens } from "@/lib/instagram-tokens"
 
 const FB_API = "https://graph.facebook.com/v22.0"
 const IG_API = "https://graph.instagram.com/v22.0"
@@ -32,11 +33,12 @@ async function apiFetch(url: string) {
   return data
 }
 
-function getToken(): { pageToken: string; userToken: string } {
-  const pageToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN
-  const userToken = process.env.INSTAGRAM_ACCESS_TOKEN
+async function getToken(): Promise<{ pageToken: string; userToken: string }> {
+  const tokens = await getInstagramTokens()
+  const pageToken = tokens.pageToken
+  const userToken = tokens.userToken
   if (!pageToken && !userToken) {
-    throw new Error("No access token set. Add INSTAGRAM_PAGE_ACCESS_TOKEN or INSTAGRAM_ACCESS_TOKEN.")
+    throw new Error("No access token set. Paste your Instagram token in Settings.")
   }
   return {
     pageToken: pageToken ?? userToken!,
@@ -106,7 +108,7 @@ function mapFormat(mediaType: string, productType?: string): string {
 
 export async function POST() {
   try {
-    const { pageToken } = getToken()
+    const { pageToken } = await getToken()
     const igId = KNOWN_IG_ACCOUNT_ID
 
     console.log("[v0] Starting sync for IG account:", igId)
@@ -139,7 +141,7 @@ export async function POST() {
     } catch (pageErr) {
       console.log("[v0] Page token failed:", pageErr)
       // Try user token
-      const { userToken } = getToken()
+      const { userToken } = await getToken()
       if (userToken !== pageToken) {
         console.log("[v0] Retrying with user token...")
         const result = await fetchMedia(igId, userToken)

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client"
 import { PostsTable } from "@/components/dashboard/posts-table"
 import { AddPostDialog } from "@/components/dashboard/add-post-dialog"
 import { InstagramSyncButton } from "@/components/dashboard/instagram-sync-button"
+import { TokenSettings } from "@/components/dashboard/token-settings"
 
 async function fetchPosts() {
   const supabase = createClient()
@@ -38,6 +39,7 @@ export function PostsView({ initialPosts }: { initialPosts: any[] }) {
           <AddPostDialog />
         </div>
       </div>
+      <TokenSettings />
       <PostsTable posts={posts ?? []} />
     </div>
   )
