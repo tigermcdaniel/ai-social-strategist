@@ -2,74 +2,95 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Instagram, RefreshCw, Check, AlertCircle } from "lucide-react"
+import { Instagram, RefreshCw, Check, AlertCircle, Download } from "lucide-react"
 import { toast } from "sonner"
 
 interface SyncResult {
   synced: number
   errors: number
+  skipped?: number
   total: number
+  fetched?: number
   message: string
 }
 
 export function InstagramSyncButton({ onSyncComplete, limit = 15 }: { onSyncComplete?: () => void; limit?: number }) {
   const [syncing, setSyncing] = useState(false)
+  const [syncMode, setSyncMode] = useState<"new" | "all" | null>(null)
   const [lastResult, setLastResult] = useState<SyncResult | null>(null)
 
-  async function handleSync() {
+  async function handleSync(mode: "new" | "all") {
     setSyncing(true)
+    setSyncMode(mode)
     setLastResult(null)
 
+    const fetchLimit = mode === "all" ? 500 : limit
+
     try {
-      const res = await fetch(`/api/instagram/sync?limit=${limit}`, { method: "POST" })
+      const res = await fetch(`/api/instagram/sync?limit=${fetchLimit}&mode=${mode}`, { method: "POST" })
       const data = await res.json()
-      console.log("[v0] Sync response status:", res.status, "body:", JSON.stringify(data))
 
       if (!res.ok) {
-        console.log("[v0] Sync error:", data.error)
         toast.error(data.error ?? "Sync failed")
         return
       }
 
       setLastResult(data)
-      if (data.errorDetails?.length > 0) {
-        console.log("[v0] Error details:", data.errorDetails)
+      if (data.synced > 0) {
+        toast.success(data.message)
+      } else if (data.skipped > 0) {
+        toast.info(data.message)
+      } else if (data.errorDetails?.length > 0) {
         toast.error(`Errors: ${data.errorDetails[0]}`)
       }
-      if (data.synced > 0) toast.success(data.message)
-      else if (!data.errorDetails?.length) toast.success(data.message)
       onSyncComplete?.()
-    } catch (err) {
-      console.log("[v0] Sync fetch error:", err)
+    } catch {
       toast.error("Failed to connect to Instagram API")
     } finally {
       setSyncing(false)
+      setSyncMode(null)
     }
   }
 
   return (
     <div className="flex items-center gap-3">
       <Button
-        onClick={handleSync}
+        onClick={() => handleSync("new")}
         disabled={syncing}
         className="bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] text-white hover:opacity-90 border-0"
       >
-        {syncing ? (
+        {syncing && syncMode === "new" ? (
           <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
         ) : (
           <Instagram className="mr-2 h-4 w-4" />
         )}
-        {syncing ? "Syncing..." : "Sync Instagram"}
+        {syncing && syncMode === "new" ? "Syncing new..." : "Sync New"}
+      </Button>
+
+      <Button
+        onClick={() => handleSync("all")}
+        disabled={syncing}
+        variant="outline"
+        size="sm"
+      >
+        {syncing && syncMode === "all" ? (
+          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <Download className="mr-2 h-4 w-4" />
+        )}
+        {syncing && syncMode === "all" ? "Syncing all..." : "Sync All"}
       </Button>
 
       {lastResult && !syncing && (
         <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
           {lastResult.errors === 0 ? (
-            <Check className="h-3.5 w-3.5 text-success" />
+            <Check className="h-3.5 w-3.5 text-green-500" />
           ) : (
-            <AlertCircle className="h-3.5 w-3.5 text-warning" />
+            <AlertCircle className="h-3.5 w-3.5 text-yellow-500" />
           )}
-          {lastResult.synced}/{lastResult.total} synced
+          {lastResult.synced} synced
+          {(lastResult.skipped ?? 0) > 0 && `, ${lastResult.skipped} skipped`}
+          {lastResult.errors > 0 && `, ${lastResult.errors} errors`}
         </span>
       )}
     </div>

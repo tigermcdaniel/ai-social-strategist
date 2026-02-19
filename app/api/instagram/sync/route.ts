@@ -2,7 +2,6 @@ import { createClient } from "@/lib/supabase/server"
 import { getInstagramTokens } from "@/lib/instagram-tokens"
 
 const FB_API = "https://graph.facebook.com/v22.0"
-const IG_API = "https://graph.instagram.com/v22.0"
 const KNOWN_IG_ACCOUNT_ID = "17841400977919619"
 
 interface IGMedia {
@@ -23,47 +22,38 @@ interface IGInsight {
 }
 
 async function apiFetch(url: string) {
-  console.log("[v0] Fetching:", url.replace(/access_token=[^&]+/, "access_token=***"))
   const res = await fetch(url, { cache: "no-store" })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    console.log("[v0] API error:", res.status, JSON.stringify(data))
     throw new Error(data?.error?.message ?? `API ${res.status}`)
   }
   return data
 }
 
-async function getToken(): Promise<{ pageToken: string; userToken: string }> {
+async function getToken(): Promise<string> {
   const tokens = await getInstagramTokens()
-  const pageToken = tokens.pageToken
-  const userToken = tokens.userToken
-  if (!pageToken && !userToken) {
+  const token = tokens.pageToken ?? tokens.userToken
+  if (!token) {
     throw new Error("No access token set. Paste your Instagram token in Settings.")
   }
-  return {
-    pageToken: pageToken ?? userToken!,
-    userToken: userToken ?? pageToken!,
-  }
+  return token
 }
 
-async function fetchMedia(igId: string, token: string): Promise<{ media: IGMedia[]; apiBase: string }> {
+// Fetches all media with pagination support
+async function fetchAllMedia(igId: string, token: string, limit: number): Promise<IGMedia[]> {
   const fields = "id,caption,media_type,timestamp,permalink,thumbnail_url,media_product_type,like_count,comments_count"
+  const allMedia: IGMedia[] = []
+  let url: string | null = `${FB_API}/${igId}/media?fields=${fields}&limit=100&access_token=${token}`
 
-  // Try Facebook Graph API first
-  try {
-    console.log("[v0] Trying graph.facebook.com for media...")
-    const url = `${FB_API}/${igId}/media?fields=${fields}&limit=200&access_token=${token}`
+  while (url && allMedia.length < limit) {
     const res = await apiFetch(url)
-    return { media: res.data ?? [], apiBase: FB_API }
-  } catch (fbErr) {
-    console.log("[v0] graph.facebook.com failed:", fbErr)
+    const items = res.data ?? []
+    allMedia.push(...items)
+    // Follow pagination cursor if we need more
+    url = allMedia.length < limit ? (res.paging?.next ?? null) : null
   }
 
-  // Fall back to Instagram Graph API
-  console.log("[v0] Trying graph.instagram.com for media...")
-  const url = `${IG_API}/me/media?fields=${fields}&limit=50&access_token=${token}`
-  const res = await apiFetch(url)
-  return { media: res.data ?? [], apiBase: IG_API }
+  return allMedia.slice(0, limit)
 }
 
 async function fetchInsights(
@@ -72,7 +62,6 @@ async function fetchInsights(
 ): Promise<Record<string, number>> {
   const insights: Record<string, number> = {}
 
-  // Batch 1: confirmed working metrics
   try {
     const res = await apiFetch(
       `${FB_API}/${mediaId}/insights?metric=views,likes,saved,shares,reach,comments&access_token=${token}`
@@ -80,12 +69,9 @@ async function fetchInsights(
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
-    console.log("[v0] Batch 1 OK:", JSON.stringify(insights))
-  } catch (err) {
-    console.log("[v0] Batch 1 failed:", err instanceof Error ? err.message : String(err))
+  } catch {
+    // insights not available for this media
   }
-
-  // Note: follows is fetched at account level, not per-media
 
   // Reels-specific metrics (separate call, non-fatal)
   try {
@@ -95,7 +81,7 @@ async function fetchInsights(
     for (const item of (res.data ?? []) as IGInsight[]) {
       insights[item.name] = item.values?.[0]?.value ?? 0
     }
-  } catch { /* not a reel - that's fine */ }
+  } catch { /* not a reel */ }
 
   return insights
 }
@@ -109,80 +95,57 @@ function mapFormat(mediaType: string, productType?: string): string {
 export async function POST(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const limit = Math.min(Math.max(Number(searchParams.get("limit")) || 15, 1), 200)
+    const limit = Math.min(Math.max(Number(searchParams.get("limit")) || 15, 1), 500)
+    const mode = searchParams.get("mode") ?? "new" // "all" = sync everything, "new" = skip existing
 
-    const { pageToken } = await getToken()
+    const token = await getToken()
     const igId = KNOWN_IG_ACCOUNT_ID
-
-    console.log("[v0] Starting sync for IG account:", igId)
-    console.log("[v0] Page token set:", !!process.env.INSTAGRAM_PAGE_ACCESS_TOKEN)
-    console.log("[v0] User token set:", !!process.env.INSTAGRAM_ACCESS_TOKEN)
 
     const supabase = await createClient()
     const testUserId = "00000000-0000-0000-0000-000000000000"
 
-    // Step 1: Verify the token works by checking permissions
-    try {
-      const debugRes = await apiFetch(`${FB_API}/debug_token?input_token=${pageToken}&access_token=${pageToken}`)
-      console.log("[v0] Token debug - app_id:", debugRes.data?.app_id, "type:", debugRes.data?.type, "scopes:", debugRes.data?.scopes)
-    } catch (e) {
-      console.log("[v0] Token debug failed (non-fatal):", e)
-    }
-
-    // Step 2: Try fetching media with multiple token/API combos
-    let mediaItems: IGMedia[]
-    let workingApiBase = FB_API
-    let workingToken = pageToken
-
-    // Try page token first
-    try {
-      console.log("[v0] Trying media fetch with page token...")
-      const result = await fetchMedia(igId, pageToken)
-      mediaItems = result.media
-      workingApiBase = result.apiBase
-      workingToken = pageToken
-    } catch (pageErr) {
-      console.log("[v0] Page token failed:", pageErr)
-      // Try user token
-      const { userToken } = await getToken()
-      if (userToken !== pageToken) {
-        console.log("[v0] Retrying with user token...")
-        const result = await fetchMedia(igId, userToken)
-        mediaItems = result.media
-        workingApiBase = result.apiBase
-        workingToken = userToken
-      } else {
-        throw pageErr
-      }
-    }
-    console.log("[v0] Fetched", mediaItems.length, "media items via", workingApiBase)
+    // Fetch media from Instagram (with pagination for large limits)
+    const mediaItems = await fetchAllMedia(igId, token, limit)
 
     if (mediaItems.length === 0) {
       return Response.json({ synced: 0, message: "No media found on this Instagram account" })
     }
 
-    // Fetch account-level follower count (this is the real snapshot)
-    let accountFollowerCount = 0
-    try {
-      const accountRes = await apiFetch(`${FB_API}/${igId}?fields=followers_count&access_token=${pageToken}`)
-      accountFollowerCount = accountRes.followers_count ?? 0
-      console.log("[v0] Account follower count:", accountFollowerCount)
-    } catch (err) {
-      console.log("[v0] Could not fetch account follower count:", err instanceof Error ? err.message : String(err))
+    // If mode=new, filter out posts we already have
+    let toProcess = mediaItems
+    if (mode === "new") {
+      const mediaIds = mediaItems.map((m) => m.id)
+      const { data: existing } = await supabase
+        .from("posts")
+        .select("instagram_media_id")
+        .in("instagram_media_id", mediaIds)
+
+      const existingIds = new Set((existing ?? []).map((e) => e.instagram_media_id))
+      toProcess = mediaItems.filter((m) => !existingIds.has(m.id))
+
+      if (toProcess.length === 0) {
+        return Response.json({
+          synced: 0,
+          skipped: mediaItems.length,
+          message: `All ${mediaItems.length} posts already synced. Use "Sync All" to refresh metrics.`,
+        })
+      }
     }
 
-    const testBatch = mediaItems.slice(0, limit)
-    console.log("[v0] Processing", testBatch.length, "of", mediaItems.length, "media items (limit:", limit, ")")
+    // Fetch account-level follower count
+    let accountFollowerCount = 0
+    try {
+      const accountRes = await apiFetch(`${FB_API}/${igId}?fields=followers_count&access_token=${token}`)
+      accountFollowerCount = accountRes.followers_count ?? 0
+    } catch { /* non-fatal */ }
 
     let synced = 0
     let errors = 0
     const errorDetails: string[] = []
 
-    for (const media of testBatch) {
+    for (const media of toProcess) {
       try {
-        console.log("[v0] Processing media:", media.id, "type:", media.media_type, "like_count:", media.like_count, "comments_count:", media.comments_count)
-        const insights = await fetchInsights(media.id, pageToken)
-        console.log("[v0] Insights for", media.id, ":", JSON.stringify(insights))
+        const insights = await fetchInsights(media.id, token)
 
         const views = insights.views ?? 0
         const reach = insights.reach ?? 0
@@ -190,16 +153,11 @@ export async function POST(request: Request) {
         const comments = insights.comments ?? media.comments_count ?? 0
         const saves = insights.saved ?? 0
         const shares = insights.shares ?? 0
-        const followerSnapshot = accountFollowerCount
-        const profileVisits = insights.profile_visits ?? 0
-        const totalInteractionsIG = insights.total_interactions ?? 0
         const replays = insights.clips_replays_count ?? 0
         const avgWatchTime = insights.ig_reels_avg_watch_time ?? 0
         const videoViewTotalTime = insights.ig_reels_video_view_total_time ?? 0
 
-        console.log("[v0] Final metrics ->", { views, reach, likes, comments, saves, shares, followerSnapshot, profileVisits, replays })
-
-        const totalInteractions = totalInteractionsIG > 0 ? totalInteractionsIG : (likes + comments + saves + shares)
+        const totalInteractions = likes + comments + saves + shares
         const engagementRate = reach > 0 ? Number(((totalInteractions / reach) * 100).toFixed(4)) : 0
         const saveRate = reach > 0 ? Number(((saves / reach) * 100).toFixed(4)) : 0
         const shareRate = reach > 0 ? Number(((shares / reach) * 100).toFixed(4)) : 0
@@ -217,9 +175,9 @@ export async function POST(request: Request) {
           comments,
           saves,
           shares,
-          follower_count_snapshot: followerSnapshot,
+          follower_count_snapshot: accountFollowerCount,
           follows_gained: 0,
-          profile_visits: profileVisits,
+          profile_visits: 0,
           total_interactions: totalInteractions,
           replays,
           avg_watch_time: avgWatchTime,
@@ -232,45 +190,33 @@ export async function POST(request: Request) {
           thumbnail_url: media.thumbnail_url ?? null,
         }
 
-        // Upsert by instagram_media_id
-        const { data: existing } = await supabase
+        // Check if already exists (for mode=all update case)
+        const { data: existingPost } = await supabase
           .from("posts")
           .select("id")
           .eq("instagram_media_id", media.id)
           .maybeSingle()
 
-        console.log("[v0] Post data to upsert:", JSON.stringify(postData))
-
-        if (existing) {
-          // Only update fields that have actual data - don't overwrite good data with zeros
+        if (existingPost) {
+          // Don't overwrite good data with zeros
           const updateData: Record<string, unknown> = { ...postData }
           if (views === 0) delete updateData.views
           if (reach === 0) delete updateData.reach
           if (saves === 0) delete updateData.saves
           if (shares === 0) delete updateData.shares
           if (comments === 0) delete updateData.comments
-          if (followerSnapshot === 0) delete updateData.follower_count_snapshot
+          if (accountFollowerCount === 0) delete updateData.follower_count_snapshot
 
           const { error } = await supabase.from("posts").update(updateData).eq("instagram_media_id", media.id)
-          if (error) {
-            const msg = `Update ${media.id}: ${error.message} (code: ${error.code}, details: ${error.details})`
-            console.log("[v0] DB Update error:", msg)
-            errorDetails.push(msg)
-            errors++
-          } else { synced++ }
+          if (error) { errorDetails.push(`Update ${media.id}: ${error.message}`); errors++ }
+          else { synced++ }
         } else {
           const { error } = await supabase.from("posts").insert(postData)
-          if (error) {
-            const msg = `Insert ${media.id}: ${error.message} (code: ${error.code}, details: ${error.details})`
-            console.log("[v0] DB Insert error:", msg)
-            errorDetails.push(msg)
-            errors++
-          } else { synced++ }
+          if (error) { errorDetails.push(`Insert ${media.id}: ${error.message}`); errors++ }
+          else { synced++ }
         }
       } catch (mediaErr) {
-        const msg = `Catch ${media.id}: ${mediaErr instanceof Error ? mediaErr.message : String(mediaErr)}`
-        console.log("[v0] Error processing media:", msg)
-        errorDetails.push(msg)
+        errorDetails.push(`${media.id}: ${mediaErr instanceof Error ? mediaErr.message : String(mediaErr)}`)
         errors++
       }
     }
@@ -291,21 +237,19 @@ export async function POST(request: Request) {
           .update({ follows_gained: Math.max(delta, 0) })
           .eq("id", allPosts[i].id)
       }
-      console.log("[v0] Computed follower deltas for", allPosts.length - 1, "posts")
     }
-
-    console.log("[v0] Sync complete:", synced, "synced,", errors, "errors")
 
     return Response.json({
       synced,
       errors,
-      total: testBatch.length,
+      skipped: mediaItems.length - toProcess.length,
+      total: toProcess.length,
+      fetched: mediaItems.length,
       igAccountId: igId,
       errorDetails: errorDetails.slice(0, 5),
       message: `Synced ${synced} posts from Instagram${errors > 0 ? ` (${errors} errors)` : ""}`,
     })
   } catch (err) {
-    console.log("[v0] Sync error:", err)
     return Response.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 }
