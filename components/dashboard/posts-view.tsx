@@ -20,6 +20,7 @@ async function fetchPosts() {
 }
 
 export function PostsView({ initialPosts }: { initialPosts: any[] }) {
+  const [postLimit, setPostLimit] = useState(15)
   const { data: posts, mutate } = useSWR("posts", fetchPosts, {
     fallbackData: initialPosts,
     revalidateOnFocus: false,
@@ -35,11 +36,11 @@ export function PostsView({ initialPosts }: { initialPosts: any[] }) {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <InstagramSyncButton onSyncComplete={() => mutate()} />
+          <InstagramSyncButton onSyncComplete={() => mutate()} limit={postLimit} />
           <AddPostDialog />
         </div>
       </div>
-      <TokenSettings />
+      <TokenSettings postLimit={postLimit} onPostLimitChange={setPostLimit} />
       <PostsTable posts={posts ?? []} />
     </div>
   )

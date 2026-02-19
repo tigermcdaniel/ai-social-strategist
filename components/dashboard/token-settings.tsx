@@ -15,7 +15,7 @@ interface TokenStatus {
   preview?: string
 }
 
-export function TokenSettings() {
+export function TokenSettings({ postLimit, onPostLimitChange }: { postLimit: number; onPostLimitChange: (n: number) => void }) {
   const [pageToken, setPageToken] = useState("")
   const [userToken, setUserToken] = useState("")
   const [saving, setSaving] = useState<string | null>(null)
@@ -149,6 +149,24 @@ export function TokenSettings() {
               {saving === "instagram_access_token" ? "Saving..." : "Save"}
             </Button>
           </div>
+        </div>
+        {/* Posts to Sync */}
+        <div className="space-y-2">
+          <Label htmlFor="post-limit" className="text-sm font-medium text-foreground">
+            Posts to Sync
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Number of recent posts to fetch from Instagram (1-200)
+          </p>
+          <Input
+            id="post-limit"
+            type="number"
+            min={1}
+            max={200}
+            value={postLimit}
+            onChange={(e) => onPostLimitChange(Math.min(200, Math.max(1, Number(e.target.value) || 1)))}
+            className="w-32 font-mono text-sm"
+          />
         </div>
       </CardContent>
     </Card>

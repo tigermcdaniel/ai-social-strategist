@@ -12,7 +12,7 @@ interface SyncResult {
   message: string
 }
 
-export function InstagramSyncButton({ onSyncComplete }: { onSyncComplete?: () => void }) {
+export function InstagramSyncButton({ onSyncComplete, limit = 15 }: { onSyncComplete?: () => void; limit?: number }) {
   const [syncing, setSyncing] = useState(false)
   const [lastResult, setLastResult] = useState<SyncResult | null>(null)
 
@@ -21,7 +21,7 @@ export function InstagramSyncButton({ onSyncComplete }: { onSyncComplete?: () =>
     setLastResult(null)
 
     try {
-      const res = await fetch("/api/instagram/sync", { method: "POST" })
+      const res = await fetch(`/api/instagram/sync?limit=${limit}`, { method: "POST" })
       const data = await res.json()
       console.log("[v0] Sync response status:", res.status, "body:", JSON.stringify(data))
 

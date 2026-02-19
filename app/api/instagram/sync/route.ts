@@ -52,7 +52,7 @@ async function fetchMedia(igId: string, token: string): Promise<{ media: IGMedia
   // Try Facebook Graph API first
   try {
     console.log("[v0] Trying graph.facebook.com for media...")
-    const url = `${FB_API}/${igId}/media?fields=${fields}&limit=50&access_token=${token}`
+    const url = `${FB_API}/${igId}/media?fields=${fields}&limit=200&access_token=${token}`
     const res = await apiFetch(url)
     return { media: res.data ?? [], apiBase: FB_API }
   } catch (fbErr) {
@@ -106,8 +106,11 @@ function mapFormat(mediaType: string, productType?: string): string {
   return "image"
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const { searchParams } = new URL(request.url)
+    const limit = Math.min(Math.max(Number(searchParams.get("limit")) || 15, 1), 200)
+
     const { pageToken } = await getToken()
     const igId = KNOWN_IG_ACCOUNT_ID
 
@@ -168,7 +171,8 @@ export async function POST() {
       console.log("[v0] Could not fetch account follower count:", err instanceof Error ? err.message : String(err))
     }
 
-    const testBatch = mediaItems.slice(0, 15)
+    const testBatch = mediaItems.slice(0, limit)
+    console.log("[v0] Processing", testBatch.length, "of", mediaItems.length, "media items (limit:", limit, ")")
 
     let synced = 0
     let errors = 0
